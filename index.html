@@ -29,7 +29,7 @@ button.active{background:#183f70}.row{display:flex;gap:8px;align-items:center}.r
 <label>Tester E-Mail<input id="email" value="dargg2501@gmail.com" type="email" autocomplete="username" required></label>
 <label>Passwort<input id="password" type="password" autocomplete="current-password" required></label>
 <button id="loginBtn">Verbinden</button> <button type="button" id="logout" class="secondary" disabled>Abmelden</button></form>
-<p id="who" class="muted">Nicht angemeldet</p></section>
+<p id="who" class="muted">Nicht angemeldet</p><button id="forgotPassword" type="button" class="secondary">Passwort vergessen?</button><p id="resetStatus" class="muted" role="status"></p></section>
 <section id="invitePanel" style="margin-top:16px" hidden><h2>Einladung annehmen · Passwort festlegen</h2><p class="muted">Lege ein neues Passwort für deinen EPOS-Testaccount fest (mindestens 12 Zeichen).</p><form id="inviteForm"><label>Neues Passwort<input id="newPassword" type="password" autocomplete="new-password" minlength="12" required></label><label>Passwort wiederholen<input id="confirmPassword" type="password" autocomplete="new-password" minlength="12" required></label><button id="inviteSubmit">Passwort speichern</button></form><p id="inviteStatus" class="muted"></p></section><section style="margin-top:16px"><h2>Chat-QR</h2>
 <p class="notice">QR-Erstellung erst nach Authentifizierung. Der Android-Scan kann noch keinen Kontakt anlegen: QR-Einlösung bleibt im Android-Client gesperrt, bis die Serverberechtigungen geprüft sind.</p>
 <button id="qrBtn" disabled>Temporären QR erzeugen</button><div id="qr" hidden></div><p id="qrExpiry" class="muted"></p></section>
@@ -64,6 +64,18 @@ async function initInvitation(){
  }catch(e){$('inviteStatus').textContent='Einladung konnte nicht bestätigt werden: '+(e.message||e)}
 }
 initInvitation();
+$('forgotPassword').onclick=async()=>{
+ const email=$('email').value.trim();
+ if(!email){$('resetStatus').textContent='Bitte zuerst E-Mail-Adresse eingeben.';return}
+ const button=$('forgotPassword');button.disabled=true;
+ $('resetStatus').textContent='Passwort-Reset wird angefordert …';
+ try{
+  const {error}=await inviteClient.auth.resetPasswordForEmail(email,{redirectTo:location.origin+location.pathname});
+  if(error)throw error;
+  $('resetStatus').textContent='Falls diese E-Mail registriert ist, erhältst du einen Link zum Zurücksetzen. Bitte auch Spam prüfen.';
+ }catch(e){$('resetStatus').textContent='Reset fehlgeschlagen: '+(e.message||e)}
+ finally{button.disabled=false}
+};
 $('inviteForm').onsubmit=async ev=>{
  ev.preventDefault();const p=$('newPassword').value;
  if(p!==$('confirmPassword').value){$('inviteStatus').textContent='Passwörter stimmen nicht überein.';return}
