@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EPOS · Chat Test Terminal</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,sans-serif;background:#0b111b;color:#eef3fb}
+*{box-sizing:border-box}body{margin:0}header{background:#05070b;padding:16px 22px;display:flex;align-items:center;justify-content:space-between}
+.logo{font-weight:900;font-size:25px;letter-spacing:2px}.logo span{color:#58a9ff}small,.muted{color:#a3b0c4}
+main{max-width:1200px;margin:auto;padding:18px;display:grid;grid-template-columns:290px 1fr;gap:16px}
+section{background:#151f2d;border:1px solid #29374a;border-radius:14px;padding:18px}
+h2{font-size:17px;margin:0 0 15px}input,button,textarea{font:inherit}input{background:#0b1421;border:1px solid #34465e;color:white;padding:11px;border-radius:8px;width:100%;margin:5px 0 10px}
+button{background:#1760bd;border:0;color:white;border-radius:8px;padding:10px 13px;cursor:pointer}button:disabled{opacity:.4;cursor:not-allowed}
+button.secondary{background:#2a394e}button.link{display:block;width:100%;text-align:left;background:transparent;border-bottom:1px solid #26364b;border-radius:0}
+button.active{background:#183f70}.row{display:flex;gap:8px;align-items:center}.row>*{min-width:0}
+#messages{height:55vh;min-height:280px;overflow:auto;padding:10px;background:#0b1421;border-radius:10px;display:flex;flex-direction:column;gap:8px}
+.bubble{max-width:78%;padding:9px 12px;background:#293a50;border-radius:12px;overflow-wrap:anywhere}.bubble.mine{align-self:flex-end;background:#164f98}
+.bubble time{display:block;color:#bdcbe0;font-size:11px;margin-top:5px}
+#status{font-size:13px;color:#9bb8d9}#qr{margin:12px auto;background:white;padding:10px;width:max-content;max-width:100%}
+#qr canvas,#qr img{max-width:100%}#log{font:12px ui-monospace,monospace;white-space:pre-wrap;max-height:120px;overflow:auto;color:#a5b8d1}
+[hidden]{display:none!important}#sendform{display:flex;gap:8px;margin-top:10px}#sendform input{margin:0;flex:1}
+.notice{background:#282b3a;padding:10px;border-radius:8px;color:#e4d6a3;font-size:13px}
+@media(max-width:720px){main{grid-template-columns:1fr}#messages{height:42vh}}
+</style></head><body>
+<header><div class="logo">EPOS<span>·</span> <small>Chat Test Terminal</small></div><div id="status">Nicht verbunden</div></header>
+<main><div>
+<section><h2>Tester · Anmeldung</h2>
+<p class="muted">Separater Supabase-Testaccount. Keine Staffcloud-Anbindung.</p>
+<form id="login"><label>Supabase URL<input id="url" placeholder="https://…supabase.co" required></label>
+<label>Publishable Key<input id="key" type="password" autocomplete="off" required></label>
+<label>Tester E-Mail<input id="email" type="email" autocomplete="username" required></label>
+<label>Passwort<input id="password" type="password" autocomplete="current-password" required></label>
+<button id="loginBtn">Verbinden</button> <button type="button" id="logout" class="secondary" disabled>Abmelden</button></form>
+<p id="who" class="muted">Nicht angemeldet</p></section>
+<section style="margin-top:16px"><h2>Chat-QR</h2>
+<p class="notice">QR-Erstellung erst nach Authentifizierung. Der Android-Scan kann noch keinen Kontakt anlegen: QR-Einlösung bleibt im Android-Client gesperrt, bis die Serverberechtigungen geprüft sind.</p>
+<button id="qrBtn" disabled>Temporären QR erzeugen</button><div id="qr" hidden></div><p id="qrExpiry" class="muted"></p></section>
+</div>
+<section><h2>Chats</h2><div id="chats" class="row" style="flex-wrap:wrap;margin-bottom:12px"><span class="muted">Bitte anmelden</span></div>
+<div id="messages" role="log" aria-live="polite"><span class="muted">Noch kein Chat ausgewählt.</span></div>
+<form id="sendform"><input id="body" placeholder="Nachricht schreiben …" maxlength="2000" disabled aria-label="Nachricht"><button id="send" disabled>Senden</button></form>
+<p class="muted" style="font-size:12px">Nur Chats, für die dein Account über RLS berechtigt ist. Aktualisierung per Realtime; zusätzlich manuell möglich.</p>
+<button id="refresh" class="secondary" disabled>Aktualisieren</button>
+<h2 style="margin-top:20px">Diagnose</h2><pre id="log"></pre>
+</section></main>
+<script type="module">
+import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.57.0';
+import QRCode from 'https://esm.sh/qrcode@1.5.4';
+const $=id=>document.getElementById(id);
+let client=null,user=null,selected=null,channel=null;
+const log=(s)=>{const line=new Date().toLocaleTimeString('de-CH')+' '+s;$('log').textContent=(line+'\n'+$('log').textContent).slice(0,4500)};
+const status=s=>$('status').textContent=s;
+const error=e=>{log('Fehler: '+(e?.message||String(e)));status('Fehler – Diagnose beachten')};
+function clearChat(){selected=null;$('messages').replaceChildren();$('body').disabled=true;$('send').disabled=true}
+async function loadChats(){
+ if(!client||!user)return;
+ const {data:members,error:me}=await client.from('chat_members').select('chat_id').eq('user_id',user.id);
+ if(me)throw me;
+ const ids=[...new Set((members||[]).map(x=>x.chat_id))];
+ $('chats').replaceChildren();
+ if(!ids.length){$('chats').textContent='Noch keine zugewiesenen Chats';clearChat();return}
+ const {data,error:e}=await client.from('chats').select('id,title,type,enabled').in('id',ids).order('type');
+ if(e)throw e;
+ for(const c of data||[]){
+  const b=document.createElement('button');b.className='secondary';b.textContent=c.title||({personal:'Privater Chat',shoutout:'Shoutout',info:'Bürokommunikation'}[c.type]||'Gruppenchat');
+  b.onclick=()=>selectChat(c);$('chats').append(b)
+ }
+ if(selected){const c=(data||[]).find(x=>x.id===selected.id);if(c)await selectChat(c);else clearChat()}
+}
+async function selectChat(c){
+ selected=c;
+ $('body').disabled=!c.enabled;$('send').disabled=!c.enabled;
+ [...$('chats').children].forEach(b=>b.classList.remove('active'));
+ const {data,error:e}=await client.from('messages').select('id,chat_id,sender_id,body,created_at').eq('chat_id',c.id).order('created_at',{ascending:true}).limit(80);
+ if(e)throw e;
+ $('messages').replaceChildren();
+ for(const m of data||[])addMessage(m);
+ if(channel)await client.removeChannel(channel);
+ channel=client.channel('terminal-'+c.id).on('postgres_changes',{event:'INSERT',schema:'public',table:'messages',filter:'chat_id=eq.'+c.id},payload=>{if(payload.new?.chat_id===selected?.id)addMessage(payload.new)}).subscribe(s=>log('Realtime: '+s));
+}
+function addMessage(m){
+ if($('messages').querySelector('[data-id="'+m.id+'"]'))return;
+ const el=document.createElement('div');el.className='bubble'+(m.sender_id===user.id?' mine':'');el.dataset.id=m.id;
+ const body=document.createElement('div');body.textContent=m.body;el.append(body);
+ const t=document.createElement('time');t.textContent=new Date(m.created_at).toLocaleString('de-CH');el.append(t);
+ $('messages').append(el);$('messages').scrollTop=$('messages').scrollHeight;
+}
+$('login').onsubmit=async ev=>{
+ ev.preventDefault();$('loginBtn').disabled=true;
+ try{
+  if(client)await client.auth.signOut();
+  const url=$('url').value.trim().replace(/\/$/,'');
+  if(!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(url))throw Error('Ungültige Supabase-Projekt-URL');
+  client=createClient(url,$('key').value.trim(),{auth:{persistSession:false,autoRefreshToken:true,detectSessionInUrl:false}});
+  const {data,error:e}=await client.auth.signInWithPassword({email:$('email').value.trim(),password:$('password').value});
+  if(e)throw e;
+  user=data.user;$('password').value='';$('who').textContent='Angemeldet: '+user.email+' · '+user.id;
+  status('Verbunden · Tester');$('logout').disabled=false;$('refresh').disabled=false;$('qrBtn').disabled=false;
+  await loadChats();log('Anmeldung erfolgreich');
+ }catch(e){error(e)}finally{$('loginBtn').disabled=false}
+};
+$('logout').onclick=async()=>{
+ if(channel&&client)await client.removeChannel(channel);
+ if(client)await client.auth.signOut();
+ user=null;client=null;clearChat();$('chats').textContent='Bitte anmelden';$('who').textContent='Nicht angemeldet';
+ $('logout').disabled=true;$('refresh').disabled=true;$('qrBtn').disabled=true;$('qr').hidden=true;status('Nicht verbunden');log('Abgemeldet')
+};
+$('refresh').onclick=()=>loadChats().catch(error);
+$('sendform').onsubmit=async ev=>{
+ ev.preventDefault();const body=$('body').value.trim();if(!selected||!body||!user)return;
+ $('send').disabled=true;
+ try{
+  const {data,error:e}=await client.from('messages').insert({chat_id:selected.id,sender_id:user.id,body}).select('id,chat_id,sender_id,body,created_at').single();
+  if(e)throw e;$('body').value='';addMessage(data);log('Nachricht gesendet');
+ }catch(e){error(e)}finally{$('send').disabled=!selected?.enabled}
+};
+$('qrBtn').onclick=async()=>{
+ try{
+  const {data,error:e}=await client.rpc('create_qr_token');
+  if(e)throw e;
+  const token=typeof data==='string'?data:data?.token;
+  if(!/^[a-f0-9]{32}$/i.test(token||''))throw Error('Ungültige QR-Antwort');
+  $('qr').replaceChildren();
+  const canvas=document.createElement('canvas');$('qr').append(canvas);
+  await QRCode.toCanvas(canvas,token,{width:220,margin:2});
+  $('qr').hidden=false;$('qrExpiry').textContent='QR gültig ca. 2 Minuten · Android-Einlösung derzeit gesperrt';
+  log('Temporärer QR erstellt (Token nicht protokolliert)');
+ }catch(e){error(e)}
+};
+</script></body></html>
