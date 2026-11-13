@@ -30,7 +30,7 @@ button.active{background:#183f70}.row{display:flex;gap:8px;align-items:center}.r
 <label>Passwort<input id="password" type="password" autocomplete="current-password" required></label>
 <button id="loginBtn">Verbinden</button> <button type="button" id="logout" class="secondary" disabled>Abmelden</button></form>
 <p id="who" class="muted">Nicht angemeldet</p></section>
-<section style="margin-top:16px"><h2>Chat-QR</h2>
+<section id="invitePanel" style="margin-top:16px" hidden><h2>Einladung annehmen · Passwort festlegen</h2><p class="muted">Lege ein neues Passwort für deinen EPOS-Testaccount fest (mindestens 12 Zeichen).</p><form id="inviteForm"><label>Neues Passwort<input id="newPassword" type="password" autocomplete="new-password" minlength="12" required></label><label>Passwort wiederholen<input id="confirmPassword" type="password" autocomplete="new-password" minlength="12" required></label><button id="inviteSubmit">Passwort speichern</button></form><p id="inviteStatus" class="muted"></p></section><section style="margin-top:16px"><h2>Chat-QR</h2>
 <p class="notice">QR-Erstellung erst nach Authentifizierung. Der Android-Scan kann noch keinen Kontakt anlegen: QR-Einlösung bleibt im Android-Client gesperrt, bis die Serverberechtigungen geprüft sind.</p>
 <button id="qrBtn" disabled>Temporären QR erzeugen</button><div id="qr" hidden></div><p id="qrExpiry" class="muted"></p></section>
 </div>
@@ -45,6 +45,40 @@ button.active{background:#183f70}.row{display:flex;gap:8px;align-items:center}.r
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.57.0';
 import QRCode from 'https://esm.sh/qrcode@1.5.4';
 const $=id=>document.getElementById(id);
+const PROJECT_URL='https://njnslqwvxrcevblgyawp.supabase.co';
+const PUBLISHABLE_KEY='sb_publishable_Dzq39yXhLC8TBxMyqG2q2A_H8NmXDmK';
+$('url').value=PROJECT_URL;$('key').value=PUBLISHABLE_KEY;$('email').value='dargg2501@gmail.com';
+const inviteClient=createClient(PROJECT_URL,PUBLISHABLE_KEY,{auth:{persistSession:false,autoRefreshToken:true,detectSessionInUrl:true}});
+async function initInvitation(){
+ const params=new URLSearchParams(location.search);
+ const hash=new URLSearchParams(location.hash.replace(/^#/,''));
+ const isInvite=['invite','recovery'].includes(params.get('type'))||['invite','recovery'].includes(hash.get('type'))||params.has('code')||hash.has('access_token');
+ if(!isInvite)return;
+ $('invitePanel').hidden=false;$('inviteStatus').textContent='Einladungslink wird geprüft …';
+ try{
+  // Supabase JS processes the invitation URL during client initialization.
+  const {data,error}=await inviteClient.auth.getSession();
+  if(error)throw error;
+  if(!data.session)throw Error('Kein gültiger Einladungs-Login. Bitte eine neue Einladung anfordern.');
+  $('inviteStatus').textContent='Einladung bestätigt. Bitte neues Passwort festlegen.';
+ }catch(e){$('inviteStatus').textContent='Einladung konnte nicht bestätigt werden: '+(e.message||e)}
+}
+initInvitation();
+$('inviteForm').onsubmit=async ev=>{
+ ev.preventDefault();const p=$('newPassword').value;
+ if(p!==$('confirmPassword').value){$('inviteStatus').textContent='Passwörter stimmen nicht überein.';return}
+ const b=$('inviteSubmit');b.disabled=true;
+ try{
+  const {data:sessionData,error:sessionError}=await inviteClient.auth.getSession();
+  if(sessionError||!sessionData.session)throw sessionError||Error('Einladung abgelaufen');
+  const {error}=await inviteClient.auth.updateUser({password:p});
+  if(error)throw error;
+  $('newPassword').value='';$('confirmPassword').value='';
+  $('inviteStatus').textContent='Passwort gespeichert! Du kannst dich oben anmelden.';
+  await inviteClient.auth.signOut();
+  history.replaceState(null,'',location.pathname);
+ }catch(e){$('inviteStatus').textContent='Fehler: '+(e.message||e)}finally{b.disabled=false}
+};
 let client=null,user=null,selected=null,channel=null;
 const log=(s)=>{const line=new Date().toLocaleTimeString('de-CH')+' '+s;$('log').textContent=(line+'\n'+$('log').textContent).slice(0,4500)};
 const status=s=>$('status').textContent=s;
